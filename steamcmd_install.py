@@ -1,9 +1,11 @@
 from pathlib import Path
-from subprocess import run
 from shutil import which
-from tkinter import Tk, filedialog
-from loguru import logger
+from subprocess import run
 from time import sleep
+from tkinter import Tk, filedialog
+from xml.etree import ElementTree
+
+from loguru import logger
 
 logger.add("steamcmd_installer.log", colorize=True)
 
@@ -63,6 +65,20 @@ def get_installed_mods(mods_folder: Path) -> list[int]:
     return mods
 
 
+#    ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+#    ┃             Get mod name to use it in downloading,             ┃
+#    ┃             to display it during installation mod,             ┃
+#    ┃    to debug any issues with exact mod, not with whole bunch    ┃
+#    ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+def get_mod_name(mod_id: int, mods_folder: Path) -> str:
+    about_xml = mods_folder / str(mod_id) / "About" / "About.xml"
+    try:
+        root = ElementTree.parse(about_xml).getroot()
+        return root.findtext("name") or str(mod_id)
+    except (FileNotFoundError, ElementTree.ParseError):
+        return str(mod_id)
+
+
 #    ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 #    ┃    Download to divided folder, to copy-paste after Rim's folder is defined    ┃
 #    ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
@@ -75,8 +91,6 @@ def download_to_temp(
     login anonymous <- to login into SteamCMD
     workshop_download_item 294100 X <- where 294100 = Rimworld SteamID, X = Mod WorkshopID
     validate <- to make sure everything installed just as need I think (if u want)
-
-    !!! VALIDATE IS TEMPORARIRLY DISABLED, BECAUSE I'M TESTING EVERYTHING, VALIDATION WILL BE THEL LAST THING I'LL ADD !!!
     """
     if path_to_save is None:
         path_to_save = Path.home() / "RimUpdater" / "temp"
@@ -103,15 +117,19 @@ def download_to_temp(
 #    ┃    Spawn one process of SteamCMD defined from define_smd() function           ┃
 #    ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 def spawn_steamcmd(
-    mods_list: list[int], install_dir: Path | None = None, batch_size: int = 8
+    mods_list: list[int],
+    mods_folder: Path,
+    install_dir: Path | None = None,
+    batch_size: int = 8,
 ) -> None:
     steamcmd_path = define_smd()
 
     for i in range(0, len(mods_list), batch_size):
         batch = mods_list[i : i + batch_size]
+
         logger.info(
-            f"=== Batch {i // batch_size + 1}/{(len(mods_list) + batch_size - 1) // batch_size} "
-            f"({len(batch)} mods) ==="
+            f"=== Batch {i // batch_size + 1}/{(len(mods_list) + batch_size - 1) // batch_size} ===\n"
+            f"=== {len(batch)} Mods ==="
         )
 
         args = [
@@ -120,14 +138,22 @@ def spawn_steamcmd(
             "0",
         ]
 
-        # force_install_dir must go before logon
         if install_dir is not None:
             args += ["+force_install_dir", str(install_dir)]
 
         args += ["+login", "anonymous"]
 
         for workshop_id in batch:
-            args += ["+workshop_download_item", "294100", str(workshop_id)]
+            mod_name = get_mod_name(workshop_id, mods_folder)
+
+            logger.info(f"\nCurrent mod in queue: {mod_name} ({workshop_id})")
+
+            args += [
+                "+workshop_download_item",
+                "294100",
+                str(workshop_id),
+                "validate",
+            ]
 
         args.append("+quit")
 
@@ -141,14 +167,23 @@ def spawn_steamcmd(
                 check=False,
             )
 
+            for workshop_id in batch:
+                mod_name = get_mod_name(workshop_id, mods_folder)
+
+                if f"Success. Downloaded item {workshop_id}" in result.stdout:
+                    logger.success(
+                        f"Mod {mod_name} ({workshop_id}) successfully installed!"
+                    )
+                else:
+                    logger.warning(
+                        f"Mod {mod_name} ({workshop_id}) installation not confirmed!"
+                    )
+
             if result.returncode != 0:
                 logger.error(f"Batch finished with code {result.returncode}")
-            else:
-                logger.success(f"Batch {i // batch_size + 1} finished")
 
         except Exception as e:
             logger.exception(f"Batch failed: {e}")
-
         if i + batch_size < len(mods_list):
             logger.info("Waiting 5 seconds before next batch...")
             sleep(5)
