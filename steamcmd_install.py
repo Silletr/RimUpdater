@@ -18,8 +18,6 @@ def define_smd():
     if not path:
         logger.critical("SteamCMD isn't found in your PATH!")
         raise FileNotFoundError("SteamCMD executable isn't in your PATH!")
-    if path:
-        logger.info(f"SteamCMD found at: {path}")
     return path
 
 
@@ -72,10 +70,13 @@ def get_installed_mods(mods_folder: Path) -> list[int]:
 #    ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 def get_mod_name(mod_id: int, mods_folder: Path) -> str:
     about_xml = mods_folder / str(mod_id) / "About" / "About.xml"
+
     try:
         root = ElementTree.parse(about_xml).getroot()
         return root.findtext("name") or str(mod_id)
-    except (FileNotFoundError, ElementTree.ParseError):
+
+    except (FileNotFoundError, ElementTree.ParseError, OSError) as e:
+        logger.warning(f"Error reading About.xml for mod {mod_id}: {e}")
         return str(mod_id)
 
 
@@ -95,6 +96,7 @@ def download_to_temp(
     if path_to_save is None:
         path_to_save = Path.home() / "RimUpdater" / "temp"
         path_to_save.mkdir(parents=True, exist_ok=True)
+
     if mods_folder is None:
         mods_folder = select_folder()
 
@@ -119,10 +121,10 @@ def download_to_temp(
 def spawn_steamcmd(
     mods_list: list[int],
     mods_folder: Path,
-    install_dir: Path | None = None,
     batch_size: int = 8,
 ) -> None:
     steamcmd_path = define_smd()
+    logger.info(f"SteamCMD found at: {steamcmd_path}")
 
     for i in range(0, len(mods_list), batch_size):
         batch = mods_list[i : i + batch_size]
@@ -138,9 +140,6 @@ def spawn_steamcmd(
             "0",
         ]
 
-        if install_dir is not None:
-            args += ["+force_install_dir", str(install_dir)]
-
         args += ["+login", "anonymous"]
 
         for workshop_id in batch:
@@ -148,29 +147,25 @@ def spawn_steamcmd(
 
             logger.info(f"\nCurrent mod in queue: {mod_name} ({workshop_id})")
 
-            args += [
-                "+workshop_download_item",
-                "294100",
-                str(workshop_id),
-                "validate",
-            ]
+            args += ["+workshop_download_item", "294100", str(workshop_id)]
 
         args.append("+quit")
 
         try:
+            logger.info(f"Running SteamCMD with args: {' '.join(args)}")
             result = run(
                 args,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
                 capture_output=True,
-                check=False,
+                check=True,
             )
 
             for workshop_id in batch:
                 mod_name = get_mod_name(workshop_id, mods_folder)
 
-                if f"Success. Downloaded item {workshop_id}" in result.stdout:
+                if f"Downloaded item {workshop_id}" in result.stdout:
                     logger.success(
                         f"Mod {mod_name} ({workshop_id}) successfully installed!"
                     )
